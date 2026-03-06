@@ -7,304 +7,285 @@ st.set_page_config(page_title="Nigeria Water Access Explorer", layout="wide")
 st.title("Nigeria Water Access Explorer")
 st.caption("Waterpoint screening and cascade planning tool for chlorine intervention targeting.")
 
+# ----------------------------------------------------
+# HOW TO USE SECTION
+# ----------------------------------------------------
 st.markdown("""
 ### How to use this tool
-1. **Select a State** to narrow the planning geography.
-2. Review the **LGA ranking** and **Ward ranking** tables to identify higher-need areas.
-3. Use filters for **waterpoint type**, **status**, **minimum assigned population**, and **minimum households within ~300m**.
-4. Toggle **Only Eligible Hand Pump Sites** to focus on likely chlorine dispenser candidates.
-5. Inspect the **map** and hover on points to view details such as waterpoint type, status, ward, and population.
-6. Download the filtered data as CSV for planning or sharing.
+
+1. Select a **State → LGA → Ward** to focus on a geography.
+2. Use filters to screen waterpoints by **population and eligibility**.
+3. Toggle **Only Eligible Hand Pump Sites** to focus on likely chlorine dispenser locations.
+4. Review **LGA and Ward rankings** to identify underserved areas.
+5. Hover on map points to view details for each waterpoint.
+6. Download filtered results if needed.
+
+Green map points = **eligible sites**  
+Red map points = **ineligible sites**
 """)
 
+# ----------------------------------------------------
+# POPULATION METRICS EXPLANATION
+# ----------------------------------------------------
+with st.expander("Population indicators explained"):
+    st.markdown("""
+**Households (HHs)**  
+Estimated number of households associated with the waterpoint catchment.
+
+**Households within ~300 m**  
+Estimated households within a 300 m radius of the waterpoint using high-resolution population grids (WorldPop).
+
+This approximates the number of households **likely to collect water from the source**.
+
+Chlorine dispenser programs typically prioritize waterpoints serving roughly:
+
+• **50–150 households (~200–750 people)**
+
+because larger shared sources increase cost-effectiveness and public health impact.
+
+**References**
+
+Evidence Action – Dispensers for Safe Water  
+https://www.evidenceaction.org/programs/safe-water/dispensers-for-safe-water/
+
+IPA chlorine dispenser research  
+https://poverty-action.org/chlorine-dispensers-safe-water
+
+Kremer et al. chlorine dispenser trials  
+https://www.nber.org/papers/w15280
+""")
+
+# ----------------------------------------------------
+# LOAD DATA
+# ----------------------------------------------------
 @st.cache_data
 def load_data():
     return pd.read_excel("nigeria_water_access_analysis.xlsx", sheet_name="waterpoints")
 
 df = load_data().copy()
 
-# -----------------------------
-# Column cleanup
-# -----------------------------
-text_cols = [
-    "state", "lga", "ward", "water_tech", "source_category",
-    "status", "management"
-]
-for col in text_cols:
-    if col in df.columns:
-        df[col] = df[col].fillna("MISSING").astype(str).str.strip()
+# ----------------------------------------------------
+# CLEANUP
+# ----------------------------------------------------
+text_cols = ["state","lga","ward","water_tech","status","management"]
+for c in text_cols:
+    if c in df.columns:
+        df[c] = df[c].fillna("MISSING").astype(str)
 
 numeric_cols = [
-    "longitude", "latitude", "assigned_population", "households_est",
-    "priority_basic", "pop_cell_100m", "pop_300m_est", "households_300m_est"
+"longitude","latitude",
+"assigned_population","households_est",
+"pop_300m_est","households_300m_est"
 ]
-for col in numeric_cols:
-    if col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
 
-# -----------------------------
-# Waterpoint classification
-# -----------------------------
+for c in numeric_cols:
+    if c in df.columns:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+# ----------------------------------------------------
+# WATERPOINT CLASSIFICATION
+# ----------------------------------------------------
 df["waterpoint_type"] = "Other"
-df.loc[df["water_tech"].str.contains("Hand Pump", case=False, na=False), "waterpoint_type"] = "Hand Pump"
-df.loc[df["water_tech"].str.contains("Motorized", case=False, na=False), "waterpoint_type"] = "Motorized Pump"
-df.loc[df["water_tech"].str.contains("Tapstand", case=False, na=False), "waterpoint_type"] = "Tapstand"
 
-# Functional classification
-df["functional_flag"] = (
-    df["status"].str.contains("Functional", case=False, na=False)
-    & ~df["status"].str.contains("Non-Functional", case=False, na=False)
+df.loc[df["water_tech"].str.contains("Hand Pump",case=False,na=False),"waterpoint_type"]="Hand Pump"
+df.loc[df["water_tech"].str.contains("Motorized",case=False,na=False),"waterpoint_type"]="Motorized Pump"
+df.loc[df["water_tech"].str.contains("Tapstand",case=False,na=False),"waterpoint_type"]="Tapstand"
+
+df["functional"] = (
+df["status"].str.contains("Functional",case=False,na=False)
+& ~df["status"].str.contains("Non-Functional",case=False,na=False)
 )
 
-# Eligibility rule for chlorine candidate sites
 df["eligible"] = (
-    (df["waterpoint_type"] == "Hand Pump")
-    & (df["functional_flag"])
+(df["waterpoint_type"]=="Hand Pump") &
+(df["functional"])
 )
 
-# Map color fields
-df["color_r"] = df["eligible"].apply(lambda x: 0 if x else 220)
-df["color_g"] = df["eligible"].apply(lambda x: 170 if x else 50)
-df["color_b"] = df["eligible"].apply(lambda x: 60 if x else 60)
+df["color_r"]=df["eligible"].apply(lambda x:0 if x else 220)
+df["color_g"]=df["eligible"].apply(lambda x:170 if x else 50)
+df["color_b"]=df["eligible"].apply(lambda x:60)
 
-# Safe display fields for hover/map
-for col in ["state", "lga", "ward", "waterpoint_type", "status"]:
-    if col not in df.columns:
-        df[col] = "MISSING"
-
-# -----------------------------
-# Sidebar filters
-# -----------------------------
+# ----------------------------------------------------
+# SIDEBAR FILTERS
+# ----------------------------------------------------
 st.sidebar.header("Filters")
 
-state_options = ["All"] + sorted([x for x in df["state"].dropna().unique() if x and x != "nan"])
-state = st.sidebar.selectbox("State", state_options)
+state = st.sidebar.selectbox("State",["All"]+sorted(df["state"].unique()))
 
-filtered = df.copy()
-if state != "All":
-    filtered = filtered[filtered["state"] == state]
+filtered=df.copy()
 
-lga_options = ["All"] + sorted([x for x in filtered["lga"].dropna().unique() if x and x != "nan"])
-lga = st.sidebar.selectbox("LGA", lga_options)
-if lga != "All":
-    filtered = filtered[filtered["lga"] == lga]
+if state!="All":
+    filtered=filtered[filtered["state"]==state]
 
-ward_options = ["All"] + sorted([x for x in filtered["ward"].dropna().unique() if x and x != "nan"])
-ward = st.sidebar.selectbox("Ward", ward_options)
-if ward != "All":
-    filtered = filtered[filtered["ward"] == ward]
+lga = st.sidebar.selectbox("LGA",["All"]+sorted(filtered["lga"].unique()))
 
-type_options = ["All"] + sorted([x for x in filtered["waterpoint_type"].dropna().unique() if x and x != "nan"])
-waterpoint_type = st.sidebar.selectbox("Waterpoint Type", type_options)
-if waterpoint_type != "All":
-    filtered = filtered[filtered["waterpoint_type"] == waterpoint_type]
+if lga!="All":
+    filtered=filtered[filtered["lga"]==lga]
 
-status_options = ["All"] + sorted([x for x in filtered["status"].dropna().unique() if x and x != "nan"])
-status = st.sidebar.selectbox("Status", status_options)
-if status != "All":
-    filtered = filtered[filtered["status"] == status]
+ward = st.sidebar.selectbox("Ward",["All"]+sorted(filtered["ward"].unique()))
 
-eligible_only = st.sidebar.checkbox("Only Eligible Hand Pump Sites", value=False)
-if eligible_only:
-    filtered = filtered[filtered["eligible"] == True]
+if ward!="All":
+    filtered=filtered[filtered["ward"]==ward]
 
-max_assigned = int(filtered["assigned_population"].fillna(0).max()) if len(filtered) > 0 else 0
-min_assigned = st.sidebar.slider("Minimum Assigned Population", 0, max_assigned if max_assigned > 0 else 1, 0)
-st.sidebar.write(f"Selected minimum assigned population: **{min_assigned:,}**")
-filtered = filtered[filtered["assigned_population"].fillna(0) >= min_assigned]
-
-max_hh300 = int(filtered["households_300m_est"].fillna(0).max()) if len(filtered) > 0 else 0
-min_hh300 = st.sidebar.slider("Minimum Households Within ~300m", 0, max_hh300 if max_hh300 > 0 else 1, 0)
-st.sidebar.write(f"Selected minimum households within ~300m: **{min_hh300:,}**")
-filtered = filtered[filtered["households_300m_est"].fillna(0) >= min_hh300]
-
-# -----------------------------
-# Summary metrics
-# -----------------------------
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Sites shown", f"{len(filtered):,}")
-c2.metric("Eligible sites", f"{int(filtered['eligible'].sum()):,}")
-c3.metric("Assigned population", f"{int(filtered['assigned_population'].fillna(0).sum()):,}")
-c4.metric("Households within ~300m", f"{int(filtered['households_300m_est'].fillna(0).sum()):,}")
-
-# -----------------------------
-# Cascaded ranking: LGA
-# -----------------------------
-st.subheader("LGA Ranking")
-if len(filtered) > 0:
-    lga_rank = (
-        filtered.groupby(["state", "lga"], dropna=False)
-        .agg(
-            waterpoints=("waterpoint_type", "count"),
-            eligible_sites=("eligible", "sum"),
-            assigned_population=("assigned_population", "sum"),
-            households_300m_est=("households_300m_est", "sum"),
-        )
-        .reset_index()
-    )
-    lga_rank["population_per_waterpoint"] = (
-        lga_rank["assigned_population"] / lga_rank["waterpoints"].replace(0, pd.NA)
-    )
-    lga_rank["households_300m_per_site"] = (
-        lga_rank["households_300m_est"] / lga_rank["waterpoints"].replace(0, pd.NA)
-    )
-    lga_rank = lga_rank.sort_values("population_per_waterpoint", ascending=False, na_position="last")
-    st.dataframe(lga_rank, use_container_width=True)
-else:
-    st.info("No rows match the current filters.")
-
-# -----------------------------
-# Cascaded ranking: Ward
-# -----------------------------
-st.subheader("Ward Ranking")
-if len(filtered) > 0:
-    ward_rank = (
-        filtered.groupby(["state", "lga", "ward"], dropna=False)
-        .agg(
-            waterpoints=("waterpoint_type", "count"),
-            eligible_sites=("eligible", "sum"),
-            assigned_population=("assigned_population", "sum"),
-            households_300m_est=("households_300m_est", "sum"),
-        )
-        .reset_index()
-    )
-
-    ward_rank["population_per_waterpoint"] = (
-        ward_rank["assigned_population"] / ward_rank["waterpoints"].replace(0, pd.NA)
-    )
-    ward_rank["households_300m_per_site"] = (
-        ward_rank["households_300m_est"] / ward_rank["waterpoints"].replace(0, pd.NA)
-    )
-
-    # Need score (simple first pass, 0-1 normalized within current filtered set)
-    for metric in ["population_per_waterpoint", "households_300m_per_site", "eligible_sites"]:
-        ward_rank[metric] = pd.to_numeric(ward_rank[metric], errors="coerce")
-
-    # Normalize pressure metrics
-    def normalize(series):
-        s = series.fillna(0)
-        if s.max() == s.min():
-            return pd.Series([0] * len(s), index=s.index)
-        return (s - s.min()) / (s.max() - s.min())
-
-    ward_rank["norm_pop_pressure"] = normalize(ward_rank["population_per_waterpoint"])
-    ward_rank["norm_access"] = normalize(ward_rank["households_300m_per_site"])
-
-    # Fewer eligible sites can imply greater need, so invert normalized eligible count
-    ward_rank["norm_eligible_inverse"] = 1 - normalize(ward_rank["eligible_sites"])
-
-    ward_rank["need_score"] = (
-        0.45 * ward_rank["norm_pop_pressure"]
-        + 0.35 * ward_rank["norm_access"]
-        + 0.20 * ward_rank["norm_eligible_inverse"]
-    )
-
-    ward_rank = ward_rank.sort_values("need_score", ascending=False, na_position="last")
-    show_cols = [
-        "state", "lga", "ward", "waterpoints", "eligible_sites",
-        "assigned_population", "households_300m_est",
-        "population_per_waterpoint", "households_300m_per_site", "need_score"
-    ]
-    st.dataframe(ward_rank[show_cols], use_container_width=True)
-else:
-    st.info("No ward ranking available for current filters.")
-
-# -----------------------------
-# Top candidate sites
-# -----------------------------
-st.subheader("Top Eligible Hand Pump Sites")
-top_sites = filtered[filtered["eligible"] == True].copy()
-top_sites = top_sites.sort_values(
-    ["households_300m_est", "assigned_population"],
-    ascending=[False, False],
-    na_position="last"
+type_filter = st.sidebar.selectbox(
+"Waterpoint Type",
+["All"]+sorted(filtered["waterpoint_type"].unique())
 )
 
-top_cols = [
-    "state", "lga", "ward", "waterpoint_type", "status",
-    "assigned_population", "households_est",
-    "pop_300m_est", "households_300m_est",
-    "longitude", "latitude"
-]
-top_cols = [c for c in top_cols if c in top_sites.columns]
+if type_filter!="All":
+    filtered=filtered[filtered["waterpoint_type"]==type_filter]
 
-if len(top_sites) > 0:
-    st.dataframe(top_sites[top_cols].head(200), use_container_width=True)
-else:
-    st.info("No eligible sites match the current filters.")
+eligible_only = st.sidebar.checkbox("Only Eligible Hand Pump Sites")
 
-# -----------------------------
-# Interactive map
-# -----------------------------
+if eligible_only:
+    filtered=filtered[filtered["eligible"]]
+
+# population filters
+max_pop=int(filtered["assigned_population"].fillna(0).max())
+
+min_pop=st.sidebar.slider(
+"Minimum assigned population",
+0,
+max_pop if max_pop>0 else 1,
+0
+)
+
+st.sidebar.write(f"Selected: **{min_pop}**")
+
+filtered=filtered[filtered["assigned_population"].fillna(0)>=min_pop]
+
+max_hh=int(filtered["households_300m_est"].fillna(0).max())
+
+min_hh=st.sidebar.slider(
+"Minimum households within 300m",
+0,
+max_hh if max_hh>0 else 1,
+0
+)
+
+st.sidebar.write(f"Selected: **{min_hh}**")
+
+filtered=filtered[filtered["households_300m_est"].fillna(0)>=min_hh]
+
+# ----------------------------------------------------
+# SUMMARY
+# ----------------------------------------------------
+c1,c2,c3,c4=st.columns(4)
+
+c1.metric("Sites shown",len(filtered))
+c2.metric("Eligible sites",filtered["eligible"].sum())
+c3.metric("Assigned population",int(filtered["assigned_population"].fillna(0).sum()))
+c4.metric("Households within 300m",int(filtered["households_300m_est"].fillna(0).sum()))
+
+# ----------------------------------------------------
+# POPULATION REACHED CALCULATOR
+# ----------------------------------------------------
+st.subheader("Population reached estimator")
+
+dispensers=st.slider("Number of dispensers to install",1,200,20)
+
+eligible_sites=filtered[filtered["eligible"]]
+
+avg_households=eligible_sites["households_300m_est"].fillna(0).mean()
+
+avg_people=avg_households*5
+
+population_reached=int(dispensers*avg_people)
+
+st.write(f"Average households near eligible sites: **{int(avg_households)}**")
+
+st.write(f"Estimated people reached per dispenser: **{int(avg_people)}**")
+
+st.success(f"Estimated population reached with {dispensers} dispensers: **{population_reached:,} people**")
+
+# ----------------------------------------------------
+# LGA RANKING
+# ----------------------------------------------------
+st.subheader("LGA ranking")
+
+lga_rank=filtered.groupby(["state","lga"]).agg(
+waterpoints=("waterpoint_type","count"),
+eligible_sites=("eligible","sum"),
+population=("assigned_population","sum"),
+households=("households_300m_est","sum")
+).reset_index()
+
+lga_rank["population_per_waterpoint"]=lga_rank["population"]/lga_rank["waterpoints"]
+
+lga_rank=lga_rank.sort_values("population_per_waterpoint",ascending=False)
+
+st.dataframe(lga_rank,use_container_width=True)
+
+# ----------------------------------------------------
+# WARD RANKING
+# ----------------------------------------------------
+st.subheader("Ward ranking")
+
+ward_rank=filtered.groupby(["state","lga","ward"]).agg(
+waterpoints=("waterpoint_type","count"),
+eligible_sites=("eligible","sum"),
+population=("assigned_population","sum"),
+households=("households_300m_est","sum")
+).reset_index()
+
+ward_rank["population_per_waterpoint"]=ward_rank["population"]/ward_rank["waterpoints"]
+
+ward_rank=ward_rank.sort_values("population_per_waterpoint",ascending=False)
+
+st.dataframe(ward_rank,use_container_width=True)
+
+# ----------------------------------------------------
+# MAP
+# ----------------------------------------------------
 st.subheader("Map")
 
-map_df = filtered.dropna(subset=["latitude", "longitude"]).copy()
+map_df=filtered.dropna(subset=["latitude","longitude"])
 
-if len(map_df) > 0:
-    tooltip = {
-        "html": """
-        <b>State:</b> {state} <br/>
-        <b>LGA:</b> {lga} <br/>
-        <b>Ward:</b> {ward} <br/>
-        <b>Type:</b> {waterpoint_type} <br/>
-        <b>Status:</b> {status} <br/>
-        <b>Eligible:</b> {eligible} <br/>
-        <b>Assigned population:</b> {assigned_population} <br/>
-        <b>Households ~300m:</b> {households_300m_est}
-        """,
-        "style": {"backgroundColor": "steelblue", "color": "white"},
-    }
+tooltip={
+"html":"""
+<b>State:</b> {state}<br/>
+<b>LGA:</b> {lga}<br/>
+<b>Ward:</b> {ward}<br/>
+<b>Type:</b> {waterpoint_type}<br/>
+<b>Status:</b> {status}<br/>
+<b>Eligible:</b> {eligible}<br/>
+<b>Households 300m:</b> {households_300m_est}
+"""
+}
 
-    layer = pdk.Layer(
-        "ScatterplotLayer",
-        data=map_df,
-        get_position="[longitude, latitude]",
-        get_fill_color="[color_r, color_g, color_b, 180]",
-        get_radius=120,
-        pickable=True,
-        auto_highlight=True,
-    )
+layer=pdk.Layer(
+"ScatterplotLayer",
+data=map_df,
+get_position="[longitude,latitude]",
+get_fill_color="[color_r,color_g,color_b]",
+get_radius=120,
+pickable=True
+)
 
-    view_state = pdk.ViewState(
-        latitude=float(map_df["latitude"].mean()),
-        longitude=float(map_df["longitude"].mean()),
-        zoom=6 if state == "All" else 8,
-        pitch=0,
-    )
+view=pdk.ViewState(
+latitude=map_df["latitude"].mean(),
+longitude=map_df["longitude"].mean(),
+zoom=6
+)
 
-    deck = pdk.Deck(
-        layers=[layer],
-        initial_view_state=view_state,
-        tooltip=tooltip,
-        map_style="mapbox://styles/mapbox/light-v9",
-    )
+st.pydeck_chart(
+pdk.Deck(
+layers=[layer],
+initial_view_state=view,
+tooltip=tooltip
+)
+)
 
-    st.pydeck_chart(deck, use_container_width=True)
-    st.caption("Green = eligible hand pump site, Red = ineligible site.")
-else:
-    st.info("No mappable points for the current filters.")
+st.caption("Green = eligible hand pump sites | Red = ineligible sites")
 
-# -----------------------------
-# Filtered data table
-# -----------------------------
-st.subheader("Filtered Waterpoints Table")
+# ----------------------------------------------------
+# DOWNLOAD
+# ----------------------------------------------------
+csv=filtered.to_csv(index=False).encode("utf-8")
 
-table_cols = [
-    "state", "lga", "ward", "waterpoint_type", "water_tech", "status", "management",
-    "assigned_population", "households_est", "pop_300m_est", "households_300m_est",
-    "eligible", "longitude", "latitude"
-]
-table_cols = [c for c in table_cols if c in filtered.columns]
-
-st.dataframe(filtered[table_cols], use_container_width=True)
-
-# -----------------------------
-# Download
-# -----------------------------
-csv_data = filtered.to_csv(index=False).encode("utf-8")
 st.download_button(
-    label="Download filtered data as CSV",
-    data=csv_data,
-    file_name="filtered_waterpoints.csv",
-    mime="text/csv",
+"Download filtered dataset",
+csv,
+"filtered_waterpoints.csv",
+" text/csv"
 )
