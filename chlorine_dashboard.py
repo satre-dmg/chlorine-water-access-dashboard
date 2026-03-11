@@ -4,274 +4,372 @@ import pydeck as pdk
 
 st.set_page_config(page_title="Nigeria Waterpoint Identification Tool", layout="wide")
 
-st.title("Nigeria Waterpoint Identification Tool – v1.1")
-st.caption("Version 1.1 – Adds DHS/GBD mortality layer and deaths-averted screening aligned to GiveWell principles")
+st.title("Nigeria Waterpoint Identification Tool – v1.4")
+st.caption("Geospatial screening tool for chlorine dispenser targeting")
 
 st.markdown("""
-### How to use this tool
+This tool screens potential chlorine dispenser sites using:
 
-1. Select **State → LGA → Ward** to focus on a geography.
-2. Use filters to screen waterpoints by **population and eligibility**.
-3. Toggle **Only Eligible Hand Pump Sites** to focus on likely chlorine dispenser locations.
-4. Review **LGA and Ward rankings** to identify underserved areas.
-5. Hover on map points to view details for each waterpoint.
-6. Review **deaths averted estimates** for candidate sites.
-7. Download filtered results for planning or field teams.
+• Waterpoint infrastructure data  
+• Population catchment estimates  
+• State-level mortality (DHS + GBD)
 
-Green points = **eligible chlorine candidate sites**  
-Red points = **not eligible**
+The tool is intended for **initial geographic prioritization only**.
+Field verification is required before implementation.
 """)
+
+st.info("""
+⚠️ Waterpoint data may be incomplete or outdated.
+
+This tool should be used for **screening and planning only**.
+Field verification is required before installation.
+""")
+
+# ---------------------------------------------------
+# REFERENCES
+# ---------------------------------------------------
+
+with st.expander("References and methodology"):
+
+    st.markdown("""
+**Evidence Action – Dispensers for Safe Water**  
+https://www.evidenceaction.org/programs/safe-water/dispensers-for-safe-water/
+
+**IPA chlorine dispenser research**  
+https://poverty-action.org/chlorine-dispensers-safe-water
+
+**Kremer et al chlorine dispenser trials**  
+https://www.nber.org/papers/w15280
+
+**GiveWell water quality intervention analysis**  
+https://www.givewell.org/international/technical/programs/water-quality
+
+**Data sources**
+
+Nigeria DHS 2024 – Under-5 mortality  
+IHME Global Burden of Disease – diarrheal mortality  
+GBD Risk factors – unsafe water attribution
+""")
+
+# ---------------------------------------------------
+# LOAD DATA
+# ---------------------------------------------------
 
 @st.cache_data
 def load_waterpoints():
     return pd.read_excel("nigeria_water_access_analysis.xlsx", sheet_name="waterpoints")
 
 @st.cache_data
-def load_state_mortality():
+def load_mortality():
     return pd.read_excel("state_mortality_inputs_exact_DHS_GBD.xlsx", sheet_name="state_inputs")
 
-df = load_waterpoints().copy()
-mort = load_state_mortality().copy()
+df = load_waterpoints()
+mort = load_mortality()
 
-# Clean waterpoint text columns
-text_cols = ["state","lga","ward","water_tech","status"]
-for col in text_cols:
-    if col in df.columns:
-        df[col] = df[col].fillna("MISSING").astype(str)
+df["state"] = df["state"].astype(str).str.strip()
+mort["state"] = mort["state"].astype(str).str.strip()
 
-# Numeric conversions
-num_cols = [
-    "longitude","latitude",
-    "assigned_population",
-    "households_300m_est"
-]
-
-for col in num_cols:
-    if col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-# Waterpoint classification
-df["waterpoint_type"] = "Other"
-
-df.loc[
-    df["water_tech"].str.contains("Hand Pump", case=False, na=False),
-    "waterpoint_type"
-] = "Hand Pump"
-
-df.loc[
-    df["water_tech"].str.contains("Motorized", case=False, na=False),
-    "waterpoint_type"
-] = "Motorized Pump"
-
-df.loc[
-    df["water_tech"].str.contains("Tapstand", case=False, na=False),
-    "waterpoint_type"
-] = "Tapstand"
-
-# Functional status
-df["functional"] = (
-    df["status"].str.contains("Functional", case=False, na=False)
-    & ~df["status"].str.contains("Non-Functional", case=False, na=False)
-)
-
-# Eligible sites
-df["eligible"] = (
-    (df["waterpoint_type"] == "Hand Pump")
-    & (df["functional"])
-)
-
-# Merge mortality data
 df = df.merge(mort, on="state", how="left")
 
-# Sidebar model parameters
-st.sidebar.header("Model parameters")
+# ---------------------------------------------------
+# CLEAN NUMERIC DATA
+# ---------------------------------------------------
 
-under5_share = st.sidebar.slider(
-    "Share of population under 5",
-    0.05, 0.30, 0.15
+numeric_cols = [
+"latitude",
+"longitude",
+"households_300m_est",
+"assigned_population"
+]
+
+for c in numeric_cols:
+    df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+
+df["households_300m_est"] = df["households_300m_est"].clip(lower=0)
+
+# ---------------------------------------------------
+# WATERPOINT CLASSIFICATION
+# ---------------------------------------------------
+
+df["waterpoint_type"] = "Other"
+
+df.loc[df["water_tech"].str.contains("Hand Pump", case=False, na=False),"waterpoint_type"] = "Hand Pump"
+df.loc[df["water_tech"].str.contains("Motorized", case=False, na=False),"waterpoint_type"] = "Motorized Pump"
+df.loc[df["water_tech"].str.contains("Tapstand", case=False, na=False),"waterpoint_type"] = "Tapstand"
+
+df["functional"] = (
+df["status"].str.contains("Functional", case=False, na=False)
+& ~df["status"].str.contains("Non-Functional", case=False, na=False)
 )
 
-mortality_reduction = st.sidebar.slider(
-    "Mortality reduction from chlorination",
-    0.01, 0.15, 0.06
+df["eligible"] = (df["waterpoint_type"]=="Hand Pump") & (df["functional"])
+
+# ---------------------------------------------------
+# PROGRAM ASSUMPTIONS
+# ---------------------------------------------------
+
+st.sidebar.header("Program assumptions")
+
+uptake_pct = st.sidebar.slider(
+"Effective uptake (%)",
+10,80,40
 )
 
-uptake = st.sidebar.slider(
-    "Effective uptake / adherence",
-    0.05, 0.90, 0.40
+mortality_reduction_pct = st.sidebar.slider(
+"Mortality reduction from clean water (%)",
+2,15,6
 )
 
 household_size = st.sidebar.slider(
-    "Household size",
-    3.0, 8.0, 5.0
+"Average household size (persons)",
+3,8,5
 )
 
-# Impact model
-df["population_served"] = df["households_300m_est"].fillna(0) * household_size
+uptake = uptake_pct/100
+mortality_reduction = mortality_reduction_pct/100
 
-df["children_under5_served"] = (
-    df["population_served"] * under5_share
+# ---------------------------------------------------
+# STATE PRIORITY SCORE
+# ---------------------------------------------------
+
+priority = mort.copy()
+
+priority["priority_score"] = (
+priority["annual_u5_mortality"]
+* priority["diarrheal_share"]
+* priority["unsafe_water_fraction"]
 )
 
-df["expected_child_deaths_per_year"] = (
-    df["children_under5_served"]
-    * df["annual_u5_mortality"]
+priority = priority.sort_values("priority_score", ascending=False)
+
+st.subheader("High priority states for chlorine intervention")
+
+display_priority = priority[[
+"state",
+"u5_mortality_per_1000",
+"annual_u5_mortality",
+"diarrheal_share",
+"unsafe_water_fraction",
+"priority_score"
+]].copy()
+
+display_priority["annual_u5_mortality"]=(display_priority["annual_u5_mortality"]*100).round(2).astype(str)+"%"
+display_priority["diarrheal_share"]=(display_priority["diarrheal_share"]*100).round(2).astype(str)+"%"
+display_priority["unsafe_water_fraction"]=(display_priority["unsafe_water_fraction"]*100).round(2).astype(str)+"%"
+
+st.dataframe(display_priority.head(10), width="stretch")
+
+# ---------------------------------------------------
+# FILTERS
+# ---------------------------------------------------
+
+st.sidebar.header("Geographic filters")
+
+states = st.sidebar.multiselect(
+"Select states",
+sorted(df["state"].dropna().unique())
 )
 
-df["deaths_averted_per_year"] = (
-    df["expected_child_deaths_per_year"]
-    * mortality_reduction
-    * uptake
+if states:
+    df = df[df["state"].isin(states)]
+
+lgas = st.sidebar.multiselect(
+"Select LGAs",
+sorted(df["lga"].dropna().unique())
 )
 
-# Map colors
-df["color_r"] = df["eligible"].apply(lambda x: 0 if x else 220)
-df["color_g"] = df["eligible"].apply(lambda x: 170 if x else 50)
-df["color_b"] = 60
+if lgas:
+    df = df[df["lga"].isin(lgas)]
 
-# Sidebar filters
-st.sidebar.header("Filters")
-
-state = st.sidebar.selectbox(
-    "State",
-    ["All"] + sorted(df["state"].dropna().unique())
+wards = st.sidebar.multiselect(
+"Select wards",
+sorted(df["ward"].dropna().unique())
 )
 
-filtered = df.copy()
+if wards:
+    df = df[df["ward"].isin(wards)]
 
-if state != "All":
-    filtered = filtered[filtered["state"] == state]
-
-lga = st.sidebar.selectbox(
-    "LGA",
-    ["All"] + sorted(filtered["lga"].dropna().unique())
-)
-
-if lga != "All":
-    filtered = filtered[filtered["lga"] == lga]
-
-ward = st.sidebar.selectbox(
-    "Ward",
-    ["All"] + sorted(filtered["ward"].dropna().unique())
-)
-
-if ward != "All":
-    filtered = filtered[filtered["ward"] == ward]
-
-type_filter = st.sidebar.selectbox(
-    "Waterpoint Type",
-    ["All"] + sorted(filtered["waterpoint_type"].dropna().unique())
-)
-
-if type_filter != "All":
-    filtered = filtered[
-        filtered["waterpoint_type"] == type_filter
-    ]
-
-eligible_only = st.sidebar.checkbox(
-    "Only Eligible Hand Pump Sites"
-)
+eligible_only = st.sidebar.checkbox("Only eligible hand pumps")
 
 if eligible_only:
-    filtered = filtered[filtered["eligible"]]
+    df = df[df["eligible"]]
 
-# Summary metrics
-c1, c2, c3, c4 = st.columns(4)
+# ---------------------------------------------------
+# IMPACT MODEL
+# ---------------------------------------------------
 
-c1.metric("Sites shown", len(filtered))
+df["population_served"] = (
+df["households_300m_est"] * household_size
+)
 
-c2.metric("Eligible sites", int(filtered["eligible"].sum()))
+df["children_under5"] = df["population_served"] * 0.15
+
+df["expected_child_deaths"] = (
+df["children_under5"] * df["annual_u5_mortality"]
+)
+
+df["deaths_averted"] = (
+df["expected_child_deaths"]
+* mortality_reduction
+* uptake
+)
+
+# ---------------------------------------------------
+# OPPORTUNITY SCORE
+# ---------------------------------------------------
+
+df["opportunity_score"] = (
+df["households_300m_est"]
+* df["annual_water_addressable_mortality"]
+* df["eligible"].astype(int)
+)
+
+# ---------------------------------------------------
+# SUMMARY METRICS
+# ---------------------------------------------------
+
+c1,c2,c3,c4 = st.columns(4)
+
+c1.metric("Waterpoints identified",len(df))
+
+c2.metric(
+"Eligible hand pumps",
+int(df["eligible"].sum())
+)
 
 c3.metric(
-    "Population served",
-    int(filtered["population_served"].fillna(0).sum())
+"Population served (people)",
+int(df["population_served"].sum())
 )
 
 c4.metric(
-    "Deaths averted / year",
-    f"{filtered['deaths_averted_per_year'].fillna(0).sum():.2f}"
+"Deaths averted per year (children)",
+round(df["deaths_averted"].sum(),2)
 )
 
-# Top sites
-st.subheader("Top candidate sites by deaths averted")
+# ---------------------------------------------------
+# LGA OPPORTUNITY RANKING
+# ---------------------------------------------------
 
-top_sites = filtered.sort_values(
-    "deaths_averted_per_year",
-    ascending=False
+st.subheader("Top LGAs for chlorine intervention")
+
+lga_rank = df.groupby(["state","lga"]).agg(
+eligible_pumps=("eligible","sum"),
+total_households=("households_300m_est","sum"),
+opportunity_score=("opportunity_score","sum")
+).reset_index()
+
+lga_rank = lga_rank.sort_values("opportunity_score",ascending=False)
+
+st.dataframe(lga_rank.head(20), width="stretch")
+
+# ---------------------------------------------------
+# WATERPOINT OPPORTUNITY RANKING
+# ---------------------------------------------------
+
+st.subheader("Top waterpoints by opportunity score")
+
+wp_rank = df.sort_values(
+"opportunity_score",
+ascending=False
 )
 
-st.dataframe(
-    top_sites[
-        [
-            "state","lga","ward",
-            "waterpoint_type",
-            "status",
-            "eligible",
-            "households_300m_est",
-            "population_served",
-            "deaths_averted_per_year"
-        ]
-    ].head(200),
-    use_container_width=True
+display_wp = wp_rank[[
+"state",
+"lga",
+"ward",
+"waterpoint_type",
+"status",
+"households_300m_est",
+"opportunity_score",
+"latitude",
+"longitude"
+]].copy()
+
+display_wp = display_wp.rename(columns={
+"households_300m_est":"Households within 300m",
+"latitude":"Latitude",
+"longitude":"Longitude",
+"opportunity_score":"Opportunity Score (HH × mortality risk)"
+})
+
+st.dataframe(display_wp.head(200), width="stretch")
+
+# ---------------------------------------------------
+# MAP
+# ---------------------------------------------------
+
+st.subheader("Waterpoint map")
+
+map_df = df.dropna(subset=["latitude","longitude"])
+
+map_df["color_r"] = map_df["eligible"].apply(lambda x:0 if x else 220)
+map_df["color_g"] = map_df["eligible"].apply(lambda x:170 if x else 50)
+map_df["color_b"] = 60
+
+layer = pdk.Layer(
+"ScatterplotLayer",
+data=map_df,
+get_position="[longitude, latitude]",
+get_fill_color="[color_r,color_g,color_b]",
+get_radius=120,
+pickable=True
 )
 
-# Map
-st.subheader("Map")
-
-map_df = filtered.dropna(
-    subset=["latitude","longitude"]
+view = pdk.ViewState(
+latitude=float(map_df["latitude"].mean()),
+longitude=float(map_df["longitude"].mean()),
+zoom=6
 )
 
-if len(map_df):
+tooltip = {
+"html":"""
+<b>State:</b> {state}<br>
+<b>LGA:</b> {lga}<br>
+<b>Ward:</b> {ward}<br>
+<b>Type:</b> {waterpoint_type}<br>
+<b>Status:</b> {status}<br>
+<b>Eligible:</b> {eligible}<br>
+<b>Households within 300m:</b> {households_300m_est}<br>
+<b>Latitude:</b> {latitude}<br>
+<b>Longitude:</b> {longitude}<br>
+<b>Opportunity score:</b> {opportunity_score}
+"""
+}
 
-    tooltip = {
-        "html": """
-        <b>State:</b> {state}<br/>
-        <b>LGA:</b> {lga}<br/>
-        <b>Ward:</b> {ward}<br/>
-        <b>Type:</b> {waterpoint_type}<br/>
-        <b>Status:</b> {status}<br/>
-        <b>Eligible:</b> {eligible}<br/>
-        <b>HH within 300m:</b> {households_300m_est}<br/>
-        <b>Deaths averted/year:</b> {deaths_averted_per_year}
-        """
-    }
+st.pydeck_chart(
+pdk.Deck(
+layers=[layer],
+initial_view_state=view,
+tooltip=tooltip
+)
+)
 
-    layer = pdk.Layer(
-        "ScatterplotLayer",
-        data=map_df,
-        get_position="[longitude, latitude]",
-        get_fill_color="[color_r, color_g, color_b]",
-        get_radius=120,
-        pickable=True
-    )
+# ---------------------------------------------------
+# DOWNLOAD
+# ---------------------------------------------------
 
-    view = pdk.ViewState(
-        latitude=float(map_df["latitude"].mean()),
-        longitude=float(map_df["longitude"].mean()),
-        zoom=6 if state == "All" else 8
-    )
+st.subheader("Download filtered dataset")
 
-    st.pydeck_chart(
-        pdk.Deck(
-            layers=[layer],
-            initial_view_state=view,
-            tooltip=tooltip
-        )
-    )
+export_df = df[[
+"state",
+"lga",
+"ward",
+"waterpoint_type",
+"status",
+"eligible",
+"households_300m_est",
+"population_served",
+"latitude",
+"longitude",
+"opportunity_score"
+]]
 
-    st.caption(
-        "Green = eligible hand pump sites | Red = ineligible sites"
-    )
-
-# Download
-st.subheader("Download filtered data")
-
-csv = filtered.to_csv(index=False).encode("utf-8")
+csv = export_df.to_csv(index=False).encode("utf-8")
 
 st.download_button(
-    "Download filtered dataset",
-    csv,
-    "filtered_waterpoints_with_mortality.csv",
-    "text/csv"
+"Download waterpoints for field verification",
+csv,
+"nigeria_waterpoints_field_verification.csv",
+"text/csv"
 )
