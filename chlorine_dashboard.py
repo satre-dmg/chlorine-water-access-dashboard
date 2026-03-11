@@ -18,6 +18,37 @@ The tool is intended for **initial geographic prioritization only**.
 Field verification is required before implementation.
 """)
 
+st.subheader("How to use this tool")
+
+st.markdown("""
+**Step 1 — Select geographies**
+
+Use the filters on the left to select one or more **states, LGAs, or wards**.
+
+**Step 2 — Review state priority**
+
+The **High priority states for chlorine intervention** table highlights states with higher under-5 mortality, diarrheal burden, and unsafe-water-related mortality.
+
+**Step 3 — Review LGA opportunities**
+
+The **Top LGAs for chlorine intervention** table highlights districts with more eligible waterpoints and larger nearby household catchments.
+
+**Step 4 — Review candidate waterpoints**
+
+The **Top waterpoints by opportunity score** table shows the strongest candidate sites based on:
+
+- households within 300 m
+- state-level water-addressable mortality
+- eligible hand pump infrastructure
+
+**Step 5 — Use the map and export for verification**
+
+Hover on points to review details and export the filtered dataset for field verification.  
+The export includes GPS coordinates, households within 300 m, and opportunity score.
+
+This tool supports **screening and prioritization**, not final site selection.
+""")
+
 st.info("""
 ⚠️ Waterpoint data may be incomplete or outdated.
 
@@ -25,12 +56,7 @@ This tool should be used for **screening and planning only**.
 Field verification is required before installation.
 """)
 
-# ---------------------------------------------------
-# REFERENCES
-# ---------------------------------------------------
-
 with st.expander("References and methodology"):
-
     st.markdown("""
 **Evidence Action – Dispensers for Safe Water**  
 https://www.evidenceaction.org/programs/safe-water/dispensers-for-safe-water/
@@ -51,10 +77,6 @@ IHME Global Burden of Disease – diarrheal mortality
 GBD Risk factors – unsafe water attribution
 """)
 
-# ---------------------------------------------------
-# LOAD DATA
-# ---------------------------------------------------
-
 @st.cache_data
 def load_waterpoints():
     return pd.read_excel("nigeria_water_access_analysis.xlsx", sheet_name="waterpoints")
@@ -71,15 +93,11 @@ mort["state"] = mort["state"].astype(str).str.strip()
 
 df = df.merge(mort, on="state", how="left")
 
-# ---------------------------------------------------
-# CLEAN NUMERIC DATA
-# ---------------------------------------------------
-
 numeric_cols = [
-"latitude",
-"longitude",
-"households_300m_est",
-"assigned_population"
+    "latitude",
+    "longitude",
+    "households_300m_est",
+    "assigned_population",
 ]
 
 for c in numeric_cols:
@@ -87,57 +105,56 @@ for c in numeric_cols:
 
 df["households_300m_est"] = df["households_300m_est"].clip(lower=0)
 
-# ---------------------------------------------------
-# WATERPOINT CLASSIFICATION
-# ---------------------------------------------------
-
 df["waterpoint_type"] = "Other"
 
-df.loc[df["water_tech"].str.contains("Hand Pump", case=False, na=False),"waterpoint_type"] = "Hand Pump"
-df.loc[df["water_tech"].str.contains("Motorized", case=False, na=False),"waterpoint_type"] = "Motorized Pump"
-df.loc[df["water_tech"].str.contains("Tapstand", case=False, na=False),"waterpoint_type"] = "Tapstand"
+df.loc[
+    df["water_tech"].str.contains("Hand Pump", case=False, na=False),
+    "waterpoint_type"
+] = "Hand Pump"
+
+df.loc[
+    df["water_tech"].str.contains("Motorized", case=False, na=False),
+    "waterpoint_type"
+] = "Motorized Pump"
+
+df.loc[
+    df["water_tech"].str.contains("Tapstand", case=False, na=False),
+    "waterpoint_type"
+] = "Tapstand"
 
 df["functional"] = (
-df["status"].str.contains("Functional", case=False, na=False)
-& ~df["status"].str.contains("Non-Functional", case=False, na=False)
+    df["status"].str.contains("Functional", case=False, na=False)
+    & ~df["status"].str.contains("Non-Functional", case=False, na=False)
 )
 
-df["eligible"] = (df["waterpoint_type"]=="Hand Pump") & (df["functional"])
-
-# ---------------------------------------------------
-# PROGRAM ASSUMPTIONS
-# ---------------------------------------------------
+df["eligible"] = (df["waterpoint_type"] == "Hand Pump") & (df["functional"])
 
 st.sidebar.header("Program assumptions")
 
 uptake_pct = st.sidebar.slider(
-"Effective uptake (%)",
-10,80,40
+    "Effective uptake (%)",
+    10, 80, 40
 )
 
 mortality_reduction_pct = st.sidebar.slider(
-"Mortality reduction from clean water (%)",
-2,15,6
+    "Mortality reduction from clean water (%)",
+    2, 15, 6
 )
 
 household_size = st.sidebar.slider(
-"Average household size (persons)",
-3,8,5
+    "Average household size (persons)",
+    3, 8, 5
 )
 
-uptake = uptake_pct/100
-mortality_reduction = mortality_reduction_pct/100
-
-# ---------------------------------------------------
-# STATE PRIORITY SCORE
-# ---------------------------------------------------
+uptake = uptake_pct / 100
+mortality_reduction = mortality_reduction_pct / 100
 
 priority = mort.copy()
 
 priority["priority_score"] = (
-priority["annual_u5_mortality"]
-* priority["diarrheal_share"]
-* priority["unsafe_water_fraction"]
+    priority["annual_u5_mortality"]
+    * priority["diarrheal_share"]
+    * priority["unsafe_water_fraction"]
 )
 
 priority = priority.sort_values("priority_score", ascending=False)
@@ -145,45 +162,49 @@ priority = priority.sort_values("priority_score", ascending=False)
 st.subheader("High priority states for chlorine intervention")
 
 display_priority = priority[[
-"state",
-"u5_mortality_per_1000",
-"annual_u5_mortality",
-"diarrheal_share",
-"unsafe_water_fraction",
-"priority_score"
+    "state",
+    "u5_mortality_per_1000",
+    "annual_u5_mortality",
+    "diarrheal_share",
+    "unsafe_water_fraction",
+    "priority_score"
 ]].copy()
 
-display_priority["annual_u5_mortality"]=(display_priority["annual_u5_mortality"]*100).round(2).astype(str)+"%"
-display_priority["diarrheal_share"]=(display_priority["diarrheal_share"]*100).round(2).astype(str)+"%"
-display_priority["unsafe_water_fraction"]=(display_priority["unsafe_water_fraction"]*100).round(2).astype(str)+"%"
+display_priority["annual_u5_mortality"] = (
+    display_priority["annual_u5_mortality"] * 100
+).round(2).astype(str) + "%"
+
+display_priority["diarrheal_share"] = (
+    display_priority["diarrheal_share"] * 100
+).round(2).astype(str) + "%"
+
+display_priority["unsafe_water_fraction"] = (
+    display_priority["unsafe_water_fraction"] * 100
+).round(2).astype(str) + "%"
 
 st.dataframe(display_priority.head(10), width="stretch")
-
-# ---------------------------------------------------
-# FILTERS
-# ---------------------------------------------------
 
 st.sidebar.header("Geographic filters")
 
 states = st.sidebar.multiselect(
-"Select states",
-sorted(df["state"].dropna().unique())
+    "Select states",
+    sorted(df["state"].dropna().unique())
 )
 
 if states:
     df = df[df["state"].isin(states)]
 
 lgas = st.sidebar.multiselect(
-"Select LGAs",
-sorted(df["lga"].dropna().unique())
+    "Select LGAs",
+    sorted(df["lga"].dropna().unique())
 )
 
 if lgas:
     df = df[df["lga"].isin(lgas)]
 
 wards = st.sidebar.multiselect(
-"Select wards",
-sorted(df["ward"].dropna().unique())
+    "Select wards",
+    sorted(df["ward"].dropna().unique())
 )
 
 if wards:
@@ -194,182 +215,172 @@ eligible_only = st.sidebar.checkbox("Only eligible hand pumps")
 if eligible_only:
     df = df[df["eligible"]]
 
-# ---------------------------------------------------
-# IMPACT MODEL
-# ---------------------------------------------------
-
-df["population_served"] = (
-df["households_300m_est"] * household_size
-)
-
+df["population_served"] = df["households_300m_est"] * household_size
 df["children_under5"] = df["population_served"] * 0.15
-
-df["expected_child_deaths"] = (
-df["children_under5"] * df["annual_u5_mortality"]
-)
+df["expected_child_deaths"] = df["children_under5"] * df["annual_u5_mortality"]
 
 df["deaths_averted"] = (
-df["expected_child_deaths"]
-* mortality_reduction
-* uptake
+    df["expected_child_deaths"]
+    * mortality_reduction
+    * uptake
 )
-
-# ---------------------------------------------------
-# OPPORTUNITY SCORE
-# ---------------------------------------------------
 
 df["opportunity_score"] = (
-df["households_300m_est"]
-* df["annual_water_addressable_mortality"]
-* df["eligible"].astype(int)
+    df["households_300m_est"]
+    * df["annual_water_addressable_mortality"]
+    * df["eligible"].astype(int)
 )
 
-# ---------------------------------------------------
-# SUMMARY METRICS
-# ---------------------------------------------------
+c1, c2, c3, c4 = st.columns(4)
 
-c1,c2,c3,c4 = st.columns(4)
-
-c1.metric("Waterpoints identified",len(df))
-
-c2.metric(
-"Eligible hand pumps",
-int(df["eligible"].sum())
-)
-
-c3.metric(
-"Population served (people)",
-int(df["population_served"].sum())
-)
-
-c4.metric(
-"Deaths averted per year (children)",
-round(df["deaths_averted"].sum(),2)
-)
-
-# ---------------------------------------------------
-# LGA OPPORTUNITY RANKING
-# ---------------------------------------------------
+c1.metric("Waterpoints identified", len(df))
+c2.metric("Eligible hand pumps", int(df["eligible"].sum()))
+c3.metric("Population served (people)", int(df["population_served"].sum()))
+c4.metric("Deaths averted per year (children)", round(df["deaths_averted"].sum(), 2))
 
 st.subheader("Top LGAs for chlorine intervention")
 
-lga_rank = df.groupby(["state","lga"]).agg(
-eligible_pumps=("eligible","sum"),
-total_households=("households_300m_est","sum"),
-opportunity_score=("opportunity_score","sum")
+lga_rank = df.groupby(["state", "lga"]).agg(
+    eligible_pumps=("eligible", "sum"),
+    total_households=("households_300m_est", "sum"),
+    opportunity_score=("opportunity_score", "sum")
 ).reset_index()
 
-lga_rank = lga_rank.sort_values("opportunity_score",ascending=False)
+lga_rank = lga_rank.sort_values("opportunity_score", ascending=False)
 
 st.dataframe(lga_rank.head(20), width="stretch")
 
-# ---------------------------------------------------
-# WATERPOINT OPPORTUNITY RANKING
-# ---------------------------------------------------
+st.subheader("State mortality context")
+
+mort_table = df[[
+    "state",
+    "u5_mortality_per_1000",
+    "annual_u5_mortality",
+    "diarrheal_share",
+    "unsafe_water_fraction",
+    "annual_water_addressable_mortality"
+]].drop_duplicates()
+
+display = mort_table.copy()
+
+display["annual_u5_mortality"] = (
+    display["annual_u5_mortality"] * 100
+).round(2).astype(str) + "%"
+
+display["diarrheal_share"] = (
+    display["diarrheal_share"] * 100
+).round(2).astype(str) + "%"
+
+display["unsafe_water_fraction"] = (
+    display["unsafe_water_fraction"] * 100
+).round(2).astype(str) + "%"
+
+display["annual_water_addressable_mortality"] = (
+    display["annual_water_addressable_mortality"] * 100
+).round(3).astype(str) + "%"
+
+display = display.rename(columns={
+    "u5_mortality_per_1000": "U5 mortality (per 1000 births)",
+    "annual_u5_mortality": "Annual U5 mortality",
+    "diarrheal_share": "Share of deaths from diarrhea",
+    "unsafe_water_fraction": "Deaths attributable to unsafe water",
+    "annual_water_addressable_mortality": "Water-addressable mortality"
+})
+
+st.dataframe(display, width="stretch")
 
 st.subheader("Top waterpoints by opportunity score")
 
-wp_rank = df.sort_values(
-"opportunity_score",
-ascending=False
-)
+wp_rank = df.sort_values("opportunity_score", ascending=False)
 
 display_wp = wp_rank[[
-"state",
-"lga",
-"ward",
-"waterpoint_type",
-"status",
-"households_300m_est",
-"opportunity_score",
-"latitude",
-"longitude"
+    "state",
+    "lga",
+    "ward",
+    "waterpoint_type",
+    "status",
+    "households_300m_est",
+    "opportunity_score",
+    "latitude",
+    "longitude"
 ]].copy()
 
 display_wp = display_wp.rename(columns={
-"households_300m_est":"Households within 300m",
-"latitude":"Latitude",
-"longitude":"Longitude",
-"opportunity_score":"Opportunity Score (HH × mortality risk)"
+    "households_300m_est": "Households within 300m",
+    "latitude": "Latitude",
+    "longitude": "Longitude",
+    "opportunity_score": "Opportunity Score (HH × mortality risk)"
 })
 
 st.dataframe(display_wp.head(200), width="stretch")
 
-# ---------------------------------------------------
-# MAP
-# ---------------------------------------------------
-
 st.subheader("Waterpoint map")
 
-map_df = df.dropna(subset=["latitude","longitude"])
+map_df = df.dropna(subset=["latitude", "longitude"]).copy()
 
-map_df["color_r"] = map_df["eligible"].apply(lambda x:0 if x else 220)
-map_df["color_g"] = map_df["eligible"].apply(lambda x:170 if x else 50)
+map_df["color_r"] = map_df["eligible"].apply(lambda x: 0 if x else 220)
+map_df["color_g"] = map_df["eligible"].apply(lambda x: 170 if x else 50)
 map_df["color_b"] = 60
 
 layer = pdk.Layer(
-"ScatterplotLayer",
-data=map_df,
-get_position="[longitude, latitude]",
-get_fill_color="[color_r,color_g,color_b]",
-get_radius=120,
-pickable=True
+    "ScatterplotLayer",
+    data=map_df,
+    get_position="[longitude, latitude]",
+    get_fill_color="[color_r,color_g,color_b]",
+    get_radius=120,
+    pickable=True
 )
 
 view = pdk.ViewState(
-latitude=float(map_df["latitude"].mean()),
-longitude=float(map_df["longitude"].mean()),
-zoom=6
+    latitude=float(map_df["latitude"].mean()),
+    longitude=float(map_df["longitude"].mean()),
+    zoom=6
 )
 
 tooltip = {
-"html":"""
-<b>State:</b> {state}<br>
-<b>LGA:</b> {lga}<br>
-<b>Ward:</b> {ward}<br>
-<b>Type:</b> {waterpoint_type}<br>
-<b>Status:</b> {status}<br>
-<b>Eligible:</b> {eligible}<br>
-<b>Households within 300m:</b> {households_300m_est}<br>
-<b>Latitude:</b> {latitude}<br>
-<b>Longitude:</b> {longitude}<br>
-<b>Opportunity score:</b> {opportunity_score}
-"""
+    "html": """
+    <b>State:</b> {state}<br>
+    <b>LGA:</b> {lga}<br>
+    <b>Ward:</b> {ward}<br>
+    <b>Type:</b> {waterpoint_type}<br>
+    <b>Status:</b> {status}<br>
+    <b>Eligible:</b> {eligible}<br>
+    <b>Households within 300m:</b> {households_300m_est}<br>
+    <b>Latitude:</b> {latitude}<br>
+    <b>Longitude:</b> {longitude}<br>
+    <b>Opportunity score:</b> {opportunity_score}
+    """
 }
 
 st.pydeck_chart(
-pdk.Deck(
-layers=[layer],
-initial_view_state=view,
-tooltip=tooltip
+    pdk.Deck(
+        layers=[layer],
+        initial_view_state=view,
+        tooltip=tooltip
+    )
 )
-)
-
-# ---------------------------------------------------
-# DOWNLOAD
-# ---------------------------------------------------
 
 st.subheader("Download filtered dataset")
 
 export_df = df[[
-"state",
-"lga",
-"ward",
-"waterpoint_type",
-"status",
-"eligible",
-"households_300m_est",
-"population_served",
-"latitude",
-"longitude",
-"opportunity_score"
+    "state",
+    "lga",
+    "ward",
+    "waterpoint_type",
+    "status",
+    "eligible",
+    "households_300m_est",
+    "population_served",
+    "latitude",
+    "longitude",
+    "opportunity_score"
 ]]
 
 csv = export_df.to_csv(index=False).encode("utf-8")
 
 st.download_button(
-"Download waterpoints for field verification",
-csv,
-"nigeria_waterpoints_field_verification.csv",
-"text/csv"
+    "Download waterpoints for field verification",
+    csv,
+    "nigeria_waterpoints_field_verification.csv",
+    "text/csv"
 )
