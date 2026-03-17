@@ -17,3 +17,4 @@ nigeria_settlement_water_access.xlsx
 nigeria_waterpoints_with_state_lga.xlsx
 waterpoints_with_lga.xlsx
 waterpoints_with_state_lga.xlsx
+.streamlit/secrets.toml
